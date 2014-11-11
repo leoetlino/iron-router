@@ -3,10 +3,10 @@ Iron.Router
 A router that works on the server and the browser, designed specifically for <a href="https://github.com/meteor/meteor" target="_blank">Meteor</a>
 
 ## The Iron.Router Guide
-Detailed explanations of router features can be found in the <a href="https://eventedmind.github.io/iron-router" target="_blank">Guide</a>.
+Detailed explanations of router features can be found in the <a href="https://github.com/EventedMind/iron-router/tree/devel/Guide.md" target="_blank">Guide</a>.
 
 ## Examples
-There are several examples in the <a href="https://github.com/EventedMind/iron-router/tree/devel/examples" target="_blank">examples folder</a>. TODO  These examples are based on the version 1.0.0-pre
+There are several examples in the <a href="https://github.com/EventedMind/iron-router/tree/devel/examples" target="_blank">examples folder</a>.
 
 ## Note
 You are looking at the *devel* branch right now. This is where active development of the project happens. We will try to keep the Guide up to date with what has been released. We're trying, but mistakes happen! So if you find an issue with the docs please file an issue here on Github. Thanks :).
@@ -41,6 +41,63 @@ Router.route('/restful', {where: 'server'})
   });
 
 ```
+
+## Migrating from 0.9.4
+
+Iron Router should be reasonably backwards compatible, but there are a few required changes that you need to know about:
+
+### Hooks
+
+`onRun` and `onBeforeAction` hooks now require you to call `this.next()`, and no longer take a `pause()` argument. So the default behaviour is reversed. For example, if you had:
+
+```
+Router.onBeforeAction(function(pause) {
+  if (! Meteor.userId()) {
+    this.render('login');
+    pause();
+  }
+});
+```
+
+You'll need to update it to
+
+```
+Router.onBeforeAction(function() {
+  if (! Meteor.userId()) {
+    this.render('login');
+  } else {
+    this.next();
+  }
+});
+```
+
+This is to fit better with existing route middleware (e.g. connect) APIs.
+
+### Query Parameters
+Query parameters now get their own object on `this.params`. To access the query object you can use `this.params.query`.
+
+### Loading Hook
+
+The `loading` hook now runs automatically on the client side if your route has a `waitOn`. As previously, you can set a global or per-route `loadingTemplate`.
+
+If you want to setup subscriptions but not have an automatic loading hook, you can use the new `subscriptions` option, which still affects `.ready()`-ness, but doesn't force the `loading` hook.
+
+### Hook and option inheritance
+
+All hooks and options are now fully inherited from parent controllers and the router itself as you might expect. The order of precendence is now route; controller; parent controller; router.
+
+### Route names
+
+A route's name is now accessible at `route.getName()` (previously it was `route.name`). In particular, you'll need to write `Router.current().route.getName()`.
+
+### Routes on client and server
+
+It's not strictly required, but moving forward, Iron Router expects all routes to be declared on both client and server. This means that the client can route to the server and visa-versa.
+
+### Catchall routes
+
+Iron Router now uses [path-to-regexp](https://github.com/pillarjs/path-to-regexp), which means the syntax for catchall routes has changed a little -- it's now `'/(.*)'`.
+
 
 ## Contributing
 Contributors are very welcome. There are many things you can help with,

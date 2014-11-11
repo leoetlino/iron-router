@@ -3,6 +3,7 @@
 A router that works on the server and the browser, designed specifically for
 [Meteor](https://github.com/meteor/meteor).
 
+
 ## Quick Start
 You can install iron:router using Meteor's package management system:
 
@@ -10,7 +11,7 @@ You can install iron:router using Meteor's package management system:
 > meteor add iron:router
 ```
 
-To update iron:router to the latest version you can use the meteor update
+To update iron:router to the latest version you can use the `meteor update`
 command:
 
 ```bash
@@ -38,7 +39,8 @@ to the page. In simple cases like this, you don't even need to provide a route
 function.
 
 So far, we've only created routes that will be run directly in the browser. But
-we can also create server routes. 
+we can also create server routes. These hook directly into the HTTP request and
+are used to implement REST endpoints.
 
 ```javascript
 Router.route('/item', function () {
@@ -70,6 +72,7 @@ The `where: 'server'` option tells the Router this is a server side route.
   - [Using Redirects](#using-redirects)
   - [Using Links to Server Routes](#using-links-to-server-routes)
 - [Named Routes](#named-routes)
+- [Template Lookup](#template-lookup)
 - [Path and Link Template Helpers](#path-and-link-template-helpers)
   - [pathFor](#pathfor)
   - [urlFor](#urlFor)
@@ -77,9 +80,10 @@ The `where: 'server'` option tells the Router this is a server side route.
 - [Route Options](#route-options)
   - [Route Specific Options](#route-specific-options)
   - [Global Default Options](#global-default-options)
-- [Waiting on Subscriptions](#waiting-on-subscriptions)
+- [Subscriptions](#subscriptions)
   - [Wait and Ready](#wait-and-ready)
-  - [Using waitOn](#using-waiton)
+  - [The subscriptions Option](#the-subscriptions-option)
+  - [The waitOn Option](#the-waiton-option)
 - [Server Routing](#server-routing)
   - [Creating Routes](#creating-routes)
   - [Restful Routes](#restful-routes)
@@ -561,6 +565,27 @@ The above JavaScript will navigate to this url:
 /post/1?q=s#hashFrag
 ```
 
+## Template Lookup
+If you don't explicitly set a template option on your route, and you don't
+explicity render a template name, the router will try to automatically render a
+template based on the name of the route. By default the router will look for the
+class case name of the template.
+
+For example, if you have a route defined like this:
+
+```javascript
+Router.route('/items/:_id', {name: 'items.show'});
+```
+
+The router will by default look for a template named `ItemsShow` with capital
+letters for each word and punctuation removed. If you would like to customize
+this behavior you can set your own converter function. For example, let's say
+you don't want any conversion. You can set the converter function like this:
+
+```
+Router.setTemplateNameConverter(function (str) { return str; });
+```
+
 ## Path and Link Template Helpers
 
 ### pathFor
@@ -672,13 +697,22 @@ Router.route('/post/:_id', {
 
   // A declarative way of providing templates for each yield region
   // in the layout
-  yieldTemplates: {
+  yieldRegions: {
     'MyAside': {to: 'aside'},
     'MyFooter': {to: 'footer'}
   },
 
-  // Subscriptions or other things we want to "wait" on. More on waitOn in the
-  // next section.
+  // a place to put your subscriptions
+  subscriptions: {
+    this.subscribe('items');
+    
+    // add the subscription to the waitlist
+    this.subscribe('item', this.params._id).wait();
+  },
+
+  // Subscriptions or other things we want to "wait" on. This also
+  // automatically uses the loading hook. That's the only difference between
+  // this option and the subscriptions option above.
   waitOn: function () {
     return Meteor.subscribe('post', this.params._id);
   },
@@ -732,7 +766,7 @@ Router.configure({
 
 Options declared on the route will override these default Router options.
 
-## Waiting on Subscriptions
+## Subscriptions
 Sometimes you want to wait on one or more subscriptions to be ready, or maybe
 on the result of some other action. For example, you might want to show a
 loading template while waiting for subscription data.
@@ -773,26 +807,47 @@ Router.route('/post/:_id', function () {
 });
 ```
 
-### Using waitOn
-In the last two examples we populated the wait list in our route function. In
-many cases this is okay. But if you're using hooks like "loading" or
-"dataNotFound" you may need the wait list to be populated before those hooks
-run. In order to accomplish this you can use the `waitOn` option. Using `waitOn`
-makes sure the wait list is populated before anything else runs.
+### The subscriptions Option
+
+You can automatically take advantage of this functionality by using the `subscriptions` option to your route.
+
+```
+Router.route('/post/:_id', {
+  subcriptions: function() {
+    // returning a subscription handle or an array of subscription handles
+    // adds them to the wait list.
+    return Meteor.subscribe('item', this.params._id);
+  },
+
+  action: function () {
+    if (this.ready()) {
+      this.render();
+    } else {
+      this.render('Loading');
+    }
+  }
+});
+```
+
+Your `subscriptions` function can return a single subscription handle (the result of `Meteor.subscribe`) or an array of them. The subscription(s) will be used to drive the `.ready()` state. 
+
+You can also inherit subscriptions from the global router config or from a controller (see below).
+
+### The waitOn Option
+Another alternative is to use `waitOn` instead of `subscribe`. This has the same effect but automatically short-circuits your route action and any before hooks (see below), and renders a `loadingTemplate` instead. You can specify that template on the route or the router itself:
 
 ```javascript
 Router.route('/post/:_id', {
+  // this template will be rendered until the subscriptions are ready
+  loadingTemplate: 'loading',
+  
   waitOn: function () {
     // return one handle, a function, or an array
     return Meteor.subscribe('post', this.params._id);
   },
 
   action: function () {
-    // this.ready() is true if all items returned from waitOn are ready
-    if (this.ready())
-      this.render();
-    else
-      this.render('Loading');
+    this.render('myTemplate');
   }
 });
 ```
@@ -841,64 +896,21 @@ will see if there are any routes defined for that url, either on the server or
 on the client. If no routes are found, the server will send a 404 http status
 code to indicate no resource was found for the given url.
 
-### Server Middleware and Connect
-You can attach middleware to the router on the server using the `use` method of
-the router. And Connect middleware just works out-of-the-box. This is because
-the `req, res, next` arguments are passed to the router handler functions like
-just in the Connect middleware stack. But typically we'll access those
-properties using `this.request`, `this.response`, and `this.next` instead.
-
-```javascript
-if (Meteor.isServer) {
-  // assuming we've loaded a package with access to connect
-  var connect = Npm.require('connect');
-  Router.use(connect.queryParser(), {where: 'server'});
-}
-```
-
-You could also create your own server-side middleware. For example, you might
-want to log all http requests.
-
-```javascript
-Router.use(function logHttpRequests () {
-  var method = this.method;
-  var url = this.url;
-  console.log(method + ' ' + url);
-
-  // go on to the next handler now
-  this.next();
-}, {where: 'server'});
-```
 
 ## Plugins
 Plugins are a way to reuse functionality in your router, either that you've
-built for your own applications, or from other package authors. There's even two
-built-in plugins called "loading" and "dataNotFound".
+built for your own applications, or from other package authors. There's even a
+built-in plugin called "dataNotFound".
 
 To use a plugin just call the `plugin` method of Router and pass the name of the
 plugin and any options for the plugin.
 
 ```javascript
-Router.plugin('loading', {loadingTemplate: 'Loading'});
+Router.plugin('dataNotFound', {notFoundTemplate: 'notFound'});
 ```
 
-This out-of-box plugin will automatically render the template named "Loading" if
-the route's data is not ready (i.e. `this.ready() == false`).
-
-```javascript
-Router.plugin('dataNotFound', {notFoundTemplate: 'NotFound'});
-
-Router.route('/post/:_id', {
-  data: function () {
-    // if this returns a falsy value like null, the NotFound template will
-    // render instead of our Post template.
-    return Posts.findOne({_id: this.params._id});
-  }
-});
-```
-
-This plugin will render the "NotFound" template if your data function returns a
-falsy value like null or false.
+This out-of-box plugin will automatically render the template named "notFound" 
+if the route's data is falsey (i.e. `! this.data()`).
 
 ### Creating Plugins
 To create a plugin just put your function on the `Iron.Router.plugins` object
@@ -932,7 +944,7 @@ Router.onBeforeAction(function () {
   // all properties available in the route function
   // are also available here such as this.params
 
-  if (!Meteor.user()) {
+  if (!Meteor.userId()) {
     // if the user is not logged in, render the Login template
     this.render('Login');
   } else {
@@ -988,7 +1000,8 @@ Router.onBeforeAction('customPackageHook');
 ```
 ### Available Hook Methods
 * **onRun**: Called when the route is first run. It is not called again if the
-  route reruns because of a computation invalidation.
+  route reruns because of a computation invalidation. This makes it a good 
+  candidate for things like analytics where you want be sure the hook only runs once. Note that this hook *won't* run again if the route is reloaded via hot code push.
 
 * **onRerun**: Called if the route reruns because its computation is
   invalidated.
@@ -1004,6 +1017,21 @@ Router.onBeforeAction('customPackageHook');
 
 * **onStop**: Called when the route is stopped, typically right before a new
   route is run.
+
+
+### Server Hooks and Connect
+
+On the server, the API signature for a `onBeforeAction` hook is identical to that of a [connect](https://github.com/senchalabs/connect) middleware:
+
+```
+Router.onBeforeAction(function(req, res, next) {
+  // in here next() is equivalent to this.next();
+}, {where: 'server'});
+```
+
+This means you can attach any connect middleware you like on the server side using `Router.onBeforeAction()`. For convience, IR makes express' [body-parser](https://github.com/expressjs/body-parser) available at `Iron.Router.bodyParser`.
+
+The Router attaches the JSON body parser automatically.
 
 ## Route Controllers
 An `Iron.RouteController` object is created when the Router handles a url
@@ -1072,8 +1100,8 @@ We might have some options defined globally with `Router.configure`, some
 options defined on the `Route` and some options defined on the
 `RouteController`. Iron.Router looks up options in this order:
 
-1. RouteController
-2. Route
+1. Route
+2. RouteController
 3. Router
 
 ### Inheriting from Route Controllers
@@ -1124,7 +1152,7 @@ reactively return the current instance of a `RouteController`. Keep in mind this
 value could be `null` if no route has run yet.
 
 You can also access the current `RouteController` from inside your template
-helpers by using the `UI.controller()` method.
+helpers by using the `Iron.controller()` method.
 
 ```javascript
 Router.route('/posts', function () {
@@ -1146,7 +1174,7 @@ defined on the `Posts` template.
 ```javascript
 Template.Posts.helpers({
   myHelper: function () {
-    var controller = UI.controller();
+    var controller = Iron.controller();
 
     // now we can get properties and call methods on the controller
   }
@@ -1155,8 +1183,9 @@ Template.Posts.helpers({
 
 ### Setting Reactive State Variables
 You can set reactive state variables on controllers using the `set` method on
-the controllers ReactiveDict `state`.
-Let's say we want to store the post `_id` in a reactive variable.
+the controller's [ReactiveDict](https://atmospherejs.com/meteor/reactive-dict) `state`.
+
+Let's say we want to store the post `_id` in a reactive variable:
 
 ```javascript
 Router.route('/posts/:_id', {name: 'post'});
@@ -1179,7 +1208,7 @@ from a template helper.
 ```javascript
 Template.Post.helpers({
   postId: function () {
-    var controller = UI.controller();
+    var controller = Iron.controller();
 
     // reactively return the value of postId
     return controller.state.get('postId');
